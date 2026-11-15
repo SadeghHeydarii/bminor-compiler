@@ -1,4 +1,6 @@
+#include "ast/ast.hpp"
 #include "lexer/lexer.hpp"
+#include "parser/parser.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -18,24 +20,37 @@ bool readFileToString(const std::string& path, std::string& out) {
     return true;
 }
 
+void printUsage() {
+    std::cout << "B-Minor Compiler Front-End\n"
+              << "Usage:\n"
+              << "  bminor --lex <source-file>     Tokenize input and print token stream\n"
+              << "  bminor --parse <source-file>   Parse input and print AST\n";
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cout << "B-Minor Compiler Front-End\n"
-                  << "Usage: bminor --lex <source-file>\n";
+        printUsage();
         return 0;
     }
 
     const std::string arg1 = argv[1];
     std::string filePath;
-    bool lexOnly = false;
+    bool modeLex = true;
+    bool modeParse = false;
 
-    if (arg1 == "--lex" && argc >= 3) {
-        lexOnly = true;
+    if (arg1 == "--help" || arg1 == "-h") {
+        printUsage();
+        return 0;
+    } else if (arg1 == "--lex" && argc >= 3) {
+        modeLex = true;
+        filePath = argv[2];
+    } else if ((arg1 == "--parse" || arg1 == "--ast") && argc >= 3) {
+        modeLex = false;
+        modeParse = true;
         filePath = argv[2];
     } else {
-        lexOnly = true;
         filePath = arg1;
     }
 
@@ -48,7 +63,7 @@ int main(int argc, char* argv[]) {
     bminor::Lexer lexer(source, filePath);
     bminor::LexResult lexResult = lexer.tokenize();
 
-    if (lexOnly) {
+    if (modeLex) {
         for (std::size_t i = 0; i < lexResult.parserTokens.size(); ++i) {
             if (i > 0) {
                 std::cout << ' ';
@@ -60,6 +75,18 @@ int main(int argc, char* argv[]) {
 
     for (const auto& diag : lexResult.diagnostics) {
         std::cerr << diag.toString() << '\n';
+    }
+
+    if (modeParse) {
+        bminor::Parser parser(lexResult.parserTokens, filePath);
+        bminor::ParseResult parseResult = parser.parse();
+        if (parseResult.program) {
+            std::cout << bminor::dumpAst(*parseResult.program);
+        }
+        for (const auto& diag : parseResult.diagnostics) {
+            std::cerr << diag.toString() << '\n';
+        }
+        return (lexResult.diagnostics.empty() && !parseResult.hasErrors()) ? 0 : 1;
     }
 
     return lexResult.diagnostics.empty() ? 0 : 1;
