@@ -1,0 +1,18 @@
+// Combined lexical and syntactic errors to verify full pipeline resilience
+bad_decl 100;
+
+first_fn: function integer ( n: integer ) = {
+    x: integer = 5@;
+    s: string = "unclosed literal
+    y: integer = ;
+    if (n > 0 {
+        print n;
+    }
+    return 1 + ;
+}
+
+safe_after: function integer () = {
+    val: integer = 99;
+    return val;
+}
+/* unclosed block comment at EOF
