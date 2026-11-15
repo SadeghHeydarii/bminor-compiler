@@ -1,0 +1,29 @@
+// Comprehensive B-Minor feature test covering declarations, arrays, control flow, and operators
+puts: function void ( s: string );
+
+g_count: integer = 10;
+g_matrix: array [2] array [2] integer = { {1, 2}, {3, 4} };
+g_flags: array [3] boolean = { true, false, true };
+
+sum_array: function integer ( arr: array [] integer, len: integer ) = {
+    i: integer = 0;
+    total: integer = 0;
+    for (i = 0; i < len; i++) {
+        if (arr[i] > 0 && !false) {
+            total = total + arr[i] ^ 2;
+        } else {
+            total = total - 1;
+        }
+    }
+    return total;
+}
+
+main: function integer () = {
+    nums: array [3] integer = { 2, 4, 6 };
+    ans: integer = sum_array(nums, 3);
+    ch: char = '\n';
+    print "ans=", ans, ch;
+    if (ans == 56 || ans != 0)
+        return 0;
+    return 1;
+}

@@ -1,0 +1,16 @@
+// Invalid syntax samples verifying panic-mode error recovery across statements and functions
+broken_global 123;
+
+test_recovery: function integer ( n: integer ) = {
+    x: integer = ;
+    if (n > 0 {
+        print n;
+    }
+    a: integer = 1 + * 2;
+    y: integer = 42;
+    return y;
+}
+
+after_recovery: function integer () = {
+    return test_recovery(5);
+}
