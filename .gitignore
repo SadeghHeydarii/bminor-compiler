@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+bin/
+obj/
+*.o
+*.obj
+*.d
+*.exe
+*.out
+
+# Generated test outputs
+*.html
+!tests/**/*.html
+
+# IDE / Editor / OS files
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
