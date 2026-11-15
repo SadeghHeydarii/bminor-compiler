@@ -1,0 +1,4 @@
+x: integer = 5@;
+s: string = "unterminated string
+y: integer = 10;
+/* unterminated block comment
