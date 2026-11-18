@@ -1,194 +1,156 @@
-# مشخصات رسمی واژگانی زبان B-Minor (Lexical Specification)
+# B-Minor Lexical Specification
 
-این سند تعریف رسمی توکن‌ها، عبارات منظم (Regular Expressions)، قواعد اولویت‌بندی و مدیریت خطای تحلیل‌گر لغوی (`Lexer`) زبان **B-Minor** را بر اساس مستند [فاز اول پروژه کامپایلر.pdf](file:///e:/OneDrive/AUT/Compiler/project/phase1/%D9%81%D8%A7%D8%B2%20%D8%A7%D9%88%D9%84%20%D9%BE%D8%B1%D9%88%DA%98%D9%87%20%DA%A9%D8%A7%D9%85%D9%BE%D8%A7%DB%8C%D9%84%D8%B1.pdf) و مرجع درسی [Compiler-CH0B.pdf](file:///e:/OneDrive/AUT/Compiler/slides/Compiler-CH0B.pdf) مستندسازی می‌کند.
-
----
-
-## ۱. ساختار هر توکن (`Token`)
-
-مطابق بخش ۲ مستند فاز اول (ص ۸–۹)، تحلیل‌گر لغوی جریان کاراکترهای کد منبع را به دنباله‌ای از توکن‌ها تبدیل می‌کند که هر توکن حداقل شامل سه جزء زیر است:
-
-| فیلد | توضیح |
-| :--- | :--- |
-| `Type` | نوع توکن (از دسته‌های زیر به‌علاوه `INVALID` برای خطاها و `EOF` برای پایان فایل) |
-| `Lexeme` | دقیقاً همان زیررشته‌ای از کد منبع که با توکن تطبیق داده شده است |
-| `SourceLocation` | موقعیت دقیق شروع توکن شامل `filename`، `line` (مبنای ۱) و `column` (مبنای ۱) |
-
-> **نکته جهت رنگ‌آمیزی نحوی (فاز ۴):** فاصله‌های سفید (`Whitespace`) و توضیحات (`Comments`) از جریان توکن‌های ارسالی به `Parser` حذف می‌شوند، اما موقعیت و بازه/اطلاعات آن‌ها برای بازنمایی دقیق کد منبع و رنگ‌آمیزی کامنت‌ها در اختیار `Syntax Highlighter` قرار خواهد گرفت.
+This document defines the formal lexical rules, regular expressions, disambiguation priorities, and error-recovery behavior for the **B-Minor** programming language, aligned with the Phase 1 specification and course reference (`Compiler-CH0B.pdf`).
 
 ---
 
-## ۲. دسته‌های رسمی توکن‌ها و عبارات منظم (۱۱ دسته جدول ص ۸)
+## 1. Token Structure
 
-### ۲.۱. کلمات کلیدی (`Keywords`)
-بر اساس اسلاید ۶ مرجع درسی (`Compiler-CH0B.pdf`)، زبان B-Minor دقیقاً **۱۵ کلمه کلیدی** زیر را دارد که نمی‌توان از آن‌ها به‌عنوان شناسه استفاده کرد:
+Implemented in [include/lexer/token.hpp](../include/lexer/token.hpp) and [include/common/source_location.hpp](../include/common/source_location.hpp), every emitted `Token` carries:
 
-- **کلمات کلیدی ساختاری و دستوری:** `array`, `else`, `for`, `function`, `if`, `print`, `return`, `void`, `while`
-- **کلمات کلیدی نام نوع‌ها (`Type names`):** `boolean`, `char`, `integer`, `string`
-- **ثابت‌های بولی (`Boolean literals`):** `false`, `true`
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `type` | `TokenType` | Lexical category, `INVALID` (recovered error), or `END_OF_FILE` |
+| `lexeme` | `std::string` | Exact matched substring from the source input |
+| `location` | `SourceLocation` | 1-based `filename`, `line`, and `column` of the token's first character |
+| `startOffset` | `std::size_t` | Zero-based byte offset in the input buffer |
+| `length` | `std::size_t` | Byte length of the matched lexeme |
 
-> **توضیح درباره `while`:** طبق اسلاید ۱۸ مرجع درسی، دستور حلقه `while` در نحو B-Minor وجود ندارد؛ با این حال طبق اسلاید ۶، واژه `while` جزو کلمات کلیدی رزروشده زبان است و نباید به‌عنوان شناسه پذیرفته شود.
+> **Dual-Stream Note:** Whitespace (`WHITESPACE`) and comments (`COMMENT_LINE`, `COMMENT_BLOCK`) are excluded from `LexResult::parserTokens`, while `LexResult::allTokens` retains every token verbatim so the AST-level Syntax Highlighter can reconstruct the original source layout and highlight comments and invalid tokens.
 
-عبارت منظم رسمی (مجموعه متناهی، تطبیق دقیق):
+---
+
+## 2. Token Categories & Formal Regular Expressions (11 Categories)
+
+### 2.1. Keywords
+B-Minor reserves **15 keywords** that cannot be used as identifiers:
+
+- **Structural & Statement Keywords:** `array`, `else`, `for`, `function`, `if`, `print`, `return`, `void`, `while`
+- **Type Keywords:** `boolean`, `char`, `integer`, `string`
+- **Boolean Literal Keywords:** `false`, `true` (classified as `BOOL_LITERAL`)
+
+> **Note on `while`:** Although `while` statements are absent from B-Minor's statement grammar, `while` is reserved as a keyword (`KW_WHILE`) at the lexical level.
+
 ```regex
 array|boolean|char|else|false|for|function|if|integer|print|return|string|true|void|while
 ```
 
----
+### 2.2. Identifiers (`IDENT`)
+- Must begin with an ASCII letter (`a-z`, `A-Z`) or underscore (`_`), followed by letters, digits (`0-9`), or underscores.
+- **Length Limit:** Identifiers may not exceed **256 characters** (longer identifiers trigger a lexical diagnostic without stopping scanning).
 
-### ۲.۲. شناسه‌ها (`Identifiers`)
-بر اساس اسلاید ۵ مرجع درسی و جدول ص ۸ مستند فاز اول:
-- شامل حروف انگلیسی (`a-z`, `A-Z`)، ارقام (`0-9`) و خط زیر (`_`) است.
-- باید با حرف یا خط زیر شروع شود.
-- **محدودیت طول:** شناسه‌ها می‌توانند حداکثر **۲۵۶ کاراکتر** طول داشته باشند.
-
-عبارت منظم رسمی:
 ```regex
 [a-zA-Z_][a-zA-Z0-9_]*
 ```
-- **قید طول:** اگر طول `Lexeme` بیش از ۲۵۶ کاراکتر باشد، خطای لغوی گزارش می‌شود (بدون توقف برنامه).
-- مثال‌ها: `i`, `x`, `myVar`, `_count`, `x1`, `Mystr`, `Fog123`, `BigLongName55`.
 
----
+Examples: `i`, `x`, `myVar`, `_count`, `x1`, `factorial`.
 
-### ۲.۳. ثابت‌های عدد صحیح (`Integer literals`)
-بر اساس اسلایدهای ۷ و ۸ مرجع درسی (`integer` یک عدد صحیح علامت‌دار ۶۴ بیتی است) و جدول ص ۸ و مثال ص ۹ مستند فاز اول:
-- توکن ثابت عدد صحیح در سطح تحلیل‌گر لغوی، دنباله‌ای از ارقام ده‌دهی بدون علامت است:
+### 2.3. Integer Literals (`INT_LITERAL`)
+- Unsigned decimal integer digit sequences at the lexical stage (formatted as `INT(<lexeme>)`):
+
 ```regex
 [0-9]+
 ```
-- **توضیح درباره علامت منفی (مثل `-1` در برابر `n - 1`):** همان‌طور که در مثال ص ۹ (`factorial(n - 1)` ← `IDENT(n) OP(-) INT(1)`) و جدول عملگرهای اسلاید ۱۱ دیده می‌شود، علامت `-` در سطح واژگانی به‌صورت توکن عملگر `OP(-)` اسکن می‌شود و اعداد منفی از طریق عملگر یکانی منفی در تحلیل‌گر نحوی ساخته می‌شوند. در غیر این صورت عبارتی مانند `x-1` بدون فاصله به‌اشتباه به دو توکن `IDENT(x)` و `INT(-1)` شکسته شده و در Parsing با خطا مواجه می‌شود.
-- مثال‌ها: `0`, `42`, `123`.
 
----
+- **Unary Negation:** Leading `-` is scanned as the operator `OP_MINUS` (`OP(-)`). Expressions such as `n - 1` or `x-1` therefore tokenize cleanly without misclassifying `-1` as a signed integer token.
 
-### ۲.۴. ثابت‌های بولی (`Boolean literals`)
-بر اساس اسلاید ۸ مرجع درسی و جدول ص ۸ و جدول ۱ ص ۱۴ مستند فاز اول:
+Examples: `0`, `42`, `123`.
+
+### 2.4. Boolean Literals (`BOOL_LITERAL`)
 ```regex
 true|false
 ```
-- پیش از شناسه‌ها بررسی می‌شوند تا به‌عنوان `BOOL_LITERAL` (و نه `IDENT`) شناخته شوند.
+Matched prior to identifiers (`BOOL(true)`, `BOOL(false)`).
 
----
+### 2.5. String Literals (`STRING_LITERAL`)
+- Enclosed in double quotes (`"..."`) with backslash escape support (`\n`, `\0`, `\"`, `\\`, and `\<c>`).
+- **Length Limit:** String content may not exceed **256 characters**.
+- Cannot cross raw unescaped newlines (`\r`, `\n`) or reach `EOF` unclosed.
 
-### ۲.۵. ثابت‌های رشته‌ای (`String literals`)
-بر اساس اسلایدهای ۷، ۸ و ۹ مرجع درسی و جدول ص ۸ مستند فاز اول:
-- دنباله‌ای از کاراکترها داخل گیومه دوتایی (`"..."`) با پشتیبانی از کاراکترهای گریز (`Escape Sequences`) با `\`:
-  - `\n`: خط جدید (کد اسکی ۱۰)
-  - `\0`: نشانه تهی (کد اسکی ۰)
-  - `\<c>`: اسلش وارونه همراه با هر کاراکتر دیگر، دقیقاً نشانه همان کاراکتر است (برای مثال `\"`, `\\`).
-- **محدودیت طول:** رشته‌ها (پس از/یا در متن محتوا) می‌توانند حداکثر **۲۵۶ کاراکتر** طول داشته باشند.
-- نباید بدون بسته‌شدن به خط جدید خام (`\n`, `\r`) یا `EOF` برسند.
-
-عبارت منظم رسمی:
 ```regex
 "([^"\\\r\n]|\\[^\r\n])*"
 ```
-- مثال: `"hello world\n"`.
 
----
+Example: `"hello\n"`.
 
-### ۲.۶. ثابت‌های کاراکتری (`Character literals`)
-بر اساس اسلایدهای ۷، ۸ و ۹ مرجع درسی و جدول ص ۸ مستند فاز اول:
-- یک کاراکتر ۸ بیتی اسکی (ASCII) یا یک کد گریز (`\n`, `\0`, `\<char>`) درون تک‌نقل‌قول (`'...'`):
+### 2.6. Character Literals (`CHAR_LITERAL`)
+- Enclosed in single quotes (`'...'`) representing a single ASCII character or escape sequence:
+
 ```regex
 '([^'\\\r\n]|\\[^\r\n])'
 ```
-- مثال‌ها: `'a'`, `'q'`, `'\n'`, `'\0'`, `'\''`.
 
----
+Examples: `'a'`, `'\n'`, `'\0'`, `'\''`.
 
-### ۲.۷. عملگرها (`Operators`)
-بر اساس جدول عملگرهای اسلاید ۱۱ مرجع درسی (`Compiler-CH0B.pdf`)، مجموعه کامل عملگرهای زبان B-Minor عبارت است از:
+### 2.7. Operators
+Complete B-Minor operator set organized by grammatical role:
 
-| زیرمجموعه | توکن‌ها | توضیح |
+| Group | Tokens | Description |
 | :--- | :--- | :--- |
-| عملگرهای پسوندی | `++`, `--` | افزایش و کاهش پسوندی |
-| عملگر یکانی | `!`, `-` | نقیض منطقی، یکانی منفی |
-| توان | `^` | عملگر توان |
-| حسابی دوتایی | `*`, `/`, `%`, `+`, `-` | ضرب، تقسیم، باقیمانده، جمع، تفریق |
-| مقایسه‌ای | `<`, `<=`, `>`, `>=`, `==`, `!=` | مقایسه‌های ترتیبی و برابری |
-| منطقی دوتایی | `&&`, `\|\|` | AND منطقی، OR منطقی |
-| انتساب | `=` | انتساب |
+| Postfix | `++`, `--` | Postfix increment / decrement |
+| Unary | `!`, `-` | Logical negation / arithmetic negation |
+| Exponentiation | `^` | Power operator |
+| Multiplicative / Additive | `*`, `/`, `%`, `+`, `-` | Arithmetic binary operators |
+| Relational / Equality | `<`, `<=`, `>`, `>=`, `==`, `!=` | Ordering and equality comparisons |
+| Logical Binary | `&&`, `\|\|` | Logical AND / OR |
+| Assignment | `=` | Assignment (`ASSIGN`) |
 
-عبارت منظم رسمی (با چیدمان طول بیشتر پیش از طول کمتر):
 ```regex
 \+\+|--|<=|>=|==|!=|&&|\|\||[+\-*/%^!<>=]
 ```
 
----
-
-### ۲.۸. جداکننده‌ها (`Delimiters`)
-بر اساس ساختارهای نحوی در اسلایدهای ۷، ۱۰، ۱۱، ۱۷، ۱۹، ۲۰، ۲۲ و ۲۳ و جدول ص ۸ مستند فاز اول:
+### 2.8. Delimiters
 ```regex
 [(){}\[\]:;,]
 ```
-شامل: `(` (`LPAREN`)، `)` (`RPAREN`)، `{` (`LBRACE`)، `}` (`RBRACE`)، `[` (`LBRACKET`)، `]` (`RBRACKET`)، `:` (`COLON`)، `;` (`SEMI`)، `,` (`COMMA`).
+Tokens: `(` (`LPAREN`), `)` (`RPAREN`), `{` (`LBRACE`), `}` (`RBRACE`), `[` (`LBRACKET`), `]` (`RBRACKET`), `:` (`COLON`), `;` (`SEMI`), `,` (`COMMA`).
 
----
+### 2.9. Single-Line Comments (`COMMENT_LINE`)
+Extends from `//` to the end of the current line (excluding `\r` and `\n`):
 
-### ۲.۹. توضیحات تک‌خطی (`Single-line comments`)
-بر اساس اسلاید ۴ مرجع درسی و جدول ص ۸ مستند فاز اول:
-- از `//` تا انتهای همان خط (پیش از `\n` یا `EOF`):
 ```regex
 //[^\r\n]*
 ```
 
----
+### 2.10. Block Comments (`COMMENT_BLOCK`)
+Extends from `/*` to the first closing `*/` (non-nesting):
 
-### ۲.۱۰. توضیحات بلوکی (`Block comments`)
-بر اساس اسلاید ۴ مرجع درسی و جدول ص ۸ مستند فاز اول:
-- از `/*` تا اولین `*/` (تودرتو نیستند):
 ```regex
 /\*([^*]|\*+[^*/])*\*+/
 ```
 
----
-
-### ۲.۱۱. فاصله‌های سفید (`Whitespace`)
-بر اساس اسلاید ۳ مرجع درسی و جدول ص ۸ مستند فاز اول:
-- ترکیب دلخواهی از فاصله (`' '`)، تورفتگی (`'\t'`)، خط جدید (`'\n'`) و کاراکتر اول خط (`'\r'`):
+### 2.11. Whitespace (`WHITESPACE`)
 ```regex
 [ \t\r\n]+
 ```
-- برای به‌روزرسانی دقیق `line` و `column` در `SourceLocation` ردیابی می‌شوند (مبنای ۱؛ در `\n` شماره خط افزایش یافته و ستون به ۱ بازمی‌گردد).
+Tracked continuously to maintain accurate 1-based `line` and `column` positions (incrementing `line` and resetting `column = 1` on `\n`).
 
 ---
 
-## ۳. قوانین رفع تداخل و اولویت تطبیق
+## 3. Disambiguation & Priority Rules
 
-هنگامی که در موقعیت فعلی ورودی بیش از یک قاعده قابلیت تطبیق داشته باشد، تحلیل‌گر لغوی دو قانون زیر را به‌صورت قطعی اعمال می‌کند (بخش ۲-ب مستند فاز اول، ص ۸–۹):
+When multiple rules could match at the current input position, the scanner deterministically enforces:
 
-1. **قاعده طولانی‌ترین تطبیق (`Longest Match / Maximal Munch`):**
-   - همواره طولانی‌ترین توکن ممکن از موقعیت فعلی انتخاب می‌شود.
-   - مثال‌ها:
-     - ورودی `<=` به‌عنوان یک توکن `OP(<=)` خوانده می‌شود، نه `OP(<)` و `OP(=)`.
-     - ورودی `++` به‌عنوان `OP(++)` خوانده می‌شود، نه دو `OP(+)`.
-     - ورودی `//` یا `/*` به‌عنوان شروع توضیح خوانده می‌شود، نه `OP(/)`.
-     - ورودی `if1` به‌عنوان `IDENT(if1)` خوانده می‌شود، نه `KW(if)` و `INT(1)`.
+1. **Longest Match (`Maximal Munch`):**
+   - `<=` is scanned as a single `OP(<=)` rather than `OP(<)` followed by `ASSIGN`.
+   - `x+++y` is tokenized as `IDENT(x) OP(++) OP(+) IDENT(y)`.
+   - `//` and `/*` take precedence over `OP(/)`.
+   - `if1` is scanned as `IDENT(if1)` rather than `KW(if)` followed by `INT(1)`.
 
-2. **اولویت کلمات کلیدی نسبت به شناسه‌ها (`Keyword-before-Identifier`):**
-   - پس از استخراج کامل لکسمِ مطابق الگوی شناسه (`[a-zA-Z_][a-zA-Z0-9_]*`) با قاعده Longest Match، ابتدا در جدول ۱۵ کلمه کلیدی بررسی می‌شود:
-     - اگر دقیقاً `true` یا `false` باشد ← `BOOL_LITERAL`.
-     - اگر یکی از ۱۳ کلمه کلیدی دیگر باشد ← `KW(<word>)`.
-     - در غیر این صورت ← `IDENT(<word>)`.
-   - مثال: رشته `return` به صورت `KW(return)` شناسایی می‌شود، نه `IDENT(return)`.
+2. **Keyword-Before-Identifier Priority:**
+   - After scanning a maximal `[a-zA-Z_][a-zA-Z0-9_]*` lexeme, it is looked up in the reserved keyword table before yielding `IDENT`:
+     - `"true"` / `"false"` → `BOOL_LITERAL`
+     - Any of the remaining 13 keywords → `KW_*`
+     - Otherwise → `IDENT`
 
 ---
 
-## ۴. مدیریت و بازیابی خطای لغوی
+## 4. Lexical Error Recovery
 
-مطابق بخش ۲-ج مستند فاز اول (ص ۹)، تحلیل‌گر لغوی در مواجهه با ورودی نامعتبر **هرگز نباید متوقف شود یا دچار خطای اجرایی شود**:
+The lexer never aborts or crashes on malformed input:
 
-1. **کاراکتر ناشناخته (مانند `@` یا `$`):**
-   - تولید یک توکن `INVALID` با لکسم همان کاراکتر و ثبت دقیق `SourceLocation` (مانند `INVALID('@')` در `1:15`).
-   - ثبت/گزارش خطای لغوی با موقعیت دقیق.
-   - عبور از کاراکتر نامعتبر و ادامه تحلیل بقیه کد منبع.
-2. **رشته‌های بسته‌نشده (`Unterminated String Literals`):**
-   - اگر پیش از دیدن `"` بسته‌شونده، کاراکتر پایان خط خام (`\n` یا `\r`) یا `EOF` رخ دهد، خطای `Unterminated string literal` گزارش می‌شود، یک توکن `INVALID` با موقعیت شروع رشته تولید می‌گردد و اسکن از خط بعدی/ادامه ورودی از سر گرفته می‌شود.
-3. **توضیحات بلوکی بسته‌نشده (`Unterminated Block Comments`):**
-   - اگر پس از `/*` تا رسیدن به `EOF` دنباله `*/` مشاهده نشود، خطای `Unterminated block comment` با موقعیت شروع کامنت گزارش شده و یک توکن `INVALID` (پیش از `EOF`) تولید می‌گردد.
-4. **ثابت کاراکتری نامعتبر یا بسته‌نشده:**
-   - اگر `'...'` خالی (`''`)، چندکاراکتری (`'ab'`) یا بسته‌نشده باشد، خطای لغوی گزارش و توکن `INVALID` تولید شده و تحلیل ادامه می‌یابد.
-5. **تجاوز از حد مجاز ۲۵۶ کاراکتر برای شناسه یا رشته:**
-   - مطابق محدودیت اسلایدهای ۵ و ۹ مرجع درسی، گزارش خطای لغوی با موقعیت دقیق و ادامه اسکن بدون کرش برنامه.
+1. **Unrecognized Characters (e.g., `@`, `$`):** Records a `Lexical` diagnostic with exact `SourceLocation`, emits `TokenType::INVALID` with that character, and resumes scanning immediately at the next character.
+2. **Unterminated String Literals:** When a raw `\n`, `\r`, or `EOF` is reached before the closing `"`, emits `Diagnostic` (`Unterminated string literal`), produces `INVALID`, and resumes cleanly on the following line/EOF.
+3. **Unterminated Block Comments:** When `EOF` is reached after `/*` without closing `*/`, emits `Diagnostic` (`Unterminated block comment`) anchored at the comment start and produces `INVALID` before `END_OF_FILE`.
+4. **Malformed Character Literals:** Empty (`''`), multi-character (`'ab'`), or unclosed `'...'` literals emit `INVALID` with a clear diagnostic and continue scanning.
+5. **256-Character Exceeded Limits:** Identifiers or string literals exceeding 256 characters log a lexical diagnostic while consuming the full token so scanning stays synchronized.

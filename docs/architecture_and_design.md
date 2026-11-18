@@ -1,73 +1,85 @@
-# معماری، الگوریتم‌ها و تصمیمات طراحی (فاز اول B-Minor)
+# Architecture, Algorithms & Design Decisions
 
-این سند جمع‌بندی معماری تمام ماژول‌های فاز اول، منطق الگوریتم‌های اصلی و علت انتخاب ساختارهای داده در مخزن `bminor` است.
+This document presents the end-to-end architecture, core algorithms, data-structure choices, and extension guidelines for Phase 1 of the **B-Minor** Compiler Front-End.
 
 ---
 
-## ۱. نمای کلی خط لوله (Pipeline)
+## 1. End-to-End Pipeline
 
-اجرای برنامه از نقطه ورود `src/main.cpp` به‌صورت ماژولار و در خط لوله زیر انجام می‌شود:
+Driven from [src/main.cpp](../src/main.cpp), compilation analysis proceeds through the following modular pipeline:
 
 ```text
 Source Code (.bminor)
    │
-   ▼  Lexer (Manual DFA)
+   ▼  bminor::Lexer (Manual DFA)
 LexResult { allTokens, parserTokens, diagnostics(Lexical) }
    │
-   ▼  Parser (LL(1)/LL(2) Recursive-Descent + Panic-Mode Recovery)
-ParseResult { ProgramNode (AST), diagnostics(Syntactic) }
+   ▼  bminor::Parser (LL(1)/LL(2) Recursive-Descent + Panic-Mode Recovery)
+ParseResult { ProgramNode AST, diagnostics(Syntactic) }
    │
-   ▼  SyntaxHighlighter (AST Visitor + Location-Keyed Map + allTokens)
-vector<HighlightedToken>
-   ├──► formatAnsi(...) ──► ANSI Terminal Output
-   └──► formatHtml(...) ──► Standalone HTML5 / Embedded CSS (No JS)
+   ▼  bminor::SyntaxHighlighter (ASTVisitor + Location Map + allTokens)
+std::vector<HighlightedToken>
+   ├──► bminor::formatAnsi(...) ──► ANSI Terminal Output
+   └──► bminor::formatHtml(...) ──► Standalone HTML5 / Embedded CSS (No JS)
 ```
 
 ---
 
-## ۲. ماژول‌های کلیدی و علت انتخاب ساختارهای داده
+## 2. Module Breakdown & Data-Structure Rationale
 
-### ۲.۱. ماژول پایه (`include/common/`)
-- [source_location.hpp](file:///e:/OneDrive/AUT/Compiler/project/bminor/include/common/source_location.hpp): ساختار `SourceLocation` (`filename`, `line`, `column` مبنای ۱) برای گزارش خطای دقیق، ساختار گره‌های AST و نگاشت متناظر توکن‌های منبع در رنگ‌آمیز.
-- [diagnostic.hpp](file:///e:/OneDrive/AUT/Compiler/project/bminor/include/common/diagnostic.hpp): ساختار `Diagnostic` با تفکیک مرحله (`DiagnosticStage::Lexical` در برابر `DiagnosticStage::Syntactic`) جهت ثبت و چاپ پیام‌های خطا بدون توقف اجرای برنامه.
+### 2.1. Shared Diagnostics & Source Positions (`include/common/`)
+- **[source_location.hpp](../include/common/source_location.hpp):** `SourceLocation` stores `filename`, 1-based `line`, and 1-based `column`. Formatting helpers `toLineColString()` (`"3:12"`) and `toString()` (`"file:3:12"`) ensure consistent diagnostic and AST position output across all stages.
+- **[diagnostic.hpp](../include/common/diagnostic.hpp):** `Diagnostic` distinguishes `DiagnosticStage::Lexical` from `DiagnosticStage::Syntactic`, recording the error stage, exact source location, and human-readable message.
 
-### ۲.۲. تحلیل‌گر لغوی (`include/lexer/`, `src/lexer/`)
-- مستندات مرتبط: [lexical_specification.md](file:///e:/OneDrive/AUT/Compiler/project/bminor/docs/lexical_specification.md) و [lexer_design.md](file:///e:/OneDrive/AUT/Compiler/project/bminor/docs/lexer_design.md).
-- **الگوریتم:** پیاده‌سازی دستی DFA (`Manual DFA`) در زمان خطی $O(n)$ با حداکثر ۱ کاراکتر lookahead.
-- **طراحی جریان دوگانه در `LexResult`:**
-  - `parserTokens`: توکن‌های معنایی بدون `WHITESPACE`، `COMMENT_LINE` و `COMMENT_BLOCK` به‌همراه `END_OF_FILE` جهت مصرف توسط `Parser`.
-  - `allTokens`: تو sequences کامل و بدون اتلاف از تمام کاراکترهای ورودی (شامل فاصله‌ها، کامنت‌ها و توکن‌های `INVALID`) تا `SyntaxHighlighter` و خروجی‌های ANSI/HTML بتوانند کد منبع اصلی را عیناً بازنمایی کنند.
-- **بازیابی خطای لغوی:** در برخورد با کاراکتر ناشناخته، توکن `INVALID` با موقعیت دقیق صادر می‌شود و اسکن بقیه فایل ادامه می‌یابد؛ همچنین رشته‌ها و کامنت‌های بلوکی بسته‌نشده بدون کرش تشخیص و گزارش می‌شوند.
+### 2.2. Lexical Analyzer (`include/lexer/`, `src/lexer/`)
+- References: [lexical_specification.md](lexical_specification.md), [lexer_design.md](lexer_design.md).
+- **Manual DFA:** Scans source input in $O(n)$ single-pass time with deterministic transitions, enforcing **Maximal Munch**, **Keyword-before-Identifier** priority across the 15 reserved keywords, and 256-character limits on identifiers and string literals.
+- **Lossless + Filtered Token Streams:** `LexResult` provides both `allTokens` (including whitespace, comments, and `INVALID` tokens) and `parserTokens` (structural tokens + `END_OF_FILE`), preventing any loss of formatting or comment text needed during highlighting.
 
-### ۲.۳. درخت نحو انتزاعی (`include/ast/ast.hpp`, `src/ast/ast.cpp`)
-- **سلسله‌مراتب شیءگرا با مالکیت یکتا (`std::unique_ptr`):** پایه `ASTNode` به گره‌های دسته‌بندی‌شده `DeclNode`, `StmtNode`, `ExprNode`, `TypeNode`, `InitializerNode`, `ParamNode` و ریشه `ProgramNode` تفکیک شده است تا مدیریت حافظه بدون نشت و خودکار باشد.
-- **فیلدهای الزامی روی تمام گره‌ها:**
-  1. `location` (`SourceLocation`): خط و ستون اولین توکن گره.
-  2. `typeAnnotation` (`std::optional<std::string>`): در فاز اول `std::nullopt` باقی می‌ماند و برای مرحله تحلیل معنایی در فازهای بعدی رزرو شده است.
-- **الگوی Visitor (`ASTVisitor`):** پیمایش AST از منطق نمایشگر درخت (`dumpAst`) و موتور رنگ‌آمیزی (`AstHighlightVisitor`) جدا شده است تا افزودن پیمایش‌های معنایی یا CFG در فازهای بعدی بدون تغییر کلاس‌های گره انجام شود.
+### 2.3. Abstract Syntax Tree (`include/ast/ast.hpp`, `src/ast/ast.cpp`)
+- **Ownership & Hierarchy:** Uses `std::unique_ptr` throughout an abstract hierarchy rooted at `ASTNode` with specialized bases `DeclNode`, `StmtNode`, `ExprNode`, `TypeNode`, `InitializerNode`, `ParamNode`, and `ProgramNode`. Recovery placeholders (`ErrorExpr`, `ErrorStmt`) allow partially valid subtrees to stay well-formed during syntax recovery.
+- **Mandatory Fields on Every `ASTNode`:**
+  1. `location` (`SourceLocation`): 1-based line and column of the construct's first token (e.g., `Identifier(name='n', loc=3:12)`, `CallExpr(callee='factorial', loc=3:16)`).
+  2. `typeAnnotation` (`std::optional<std::string>`): Initialized to `std::nullopt` during Phase 1 AST construction and reserved for Semantic Analysis in subsequent project phases.
+- **Visitor Pattern (`ASTVisitor`):** Separates tree traversal from node representation, cleanly powering both `dumpAst()` (`--parse`) and `AstHighlightVisitor` (`--ansi` / `--html`).
 
-### ۲.۴. تحلیل‌گر نحوی و بازیابی خطا (`include/parser/`, `src/parser/`)
-- مستندات مرتبط: [grammar_ebnf.md](file:///e:/OneDrive/AUT/Compiler/project/bminor/docs/grammar_ebnf.md) و [parser_compatibility.md](file:///e:/OneDrive/AUT/Compiler/project/bminor/docs/parser_compatibility.md).
-- **الگوریتم:** `Recursive-Descent Parser` کاملاً `LL(1)` به‌جز یک تصمیم `LL(2)` در `parseStmt()` برای تفکیک اعلان متغیر محلی (`IDENT ':' ...`) از دستور عبارتی (`IDENT ...`).
-- **اولویت و شرکت‌پذیری عملگرها:** با استفاده از تابع‌های تودرتو برای سطوح اولویت، و الگوی مشترک `parseBinaryLeft` برای عملگرهای چپ‌شرکت‌پذیر (`||`, `&&`, مقایسه، `+`/`-`, `*`/`/`/`%`) و بازگشت راست در `parseAssign` (`=`) و `parsePower` (`^`).
-- **بازیابی خطای `Panic-Mode Recovery`:**
-  - استفاده از پرچم `panicMode_` برای جلوگیری از پیام‌های خطای آبشاری روی یک ساختار خراب منفرد.
-  - حفظ ساختار `{ ... }` هنگام گزارش `missing ')' before '{'` بدون بلعیدن آکولاد باز بلوک.
-  - همگام‌سازی در سطح دستور (`;`, `{`, `}`, `if`, `for`, `return`, `print`, `IDENT ':'`, `EOF`) و سطح اعلان با شمارش عمق آکولادها (`braceDepth`) به‌علاوه محافظ پیشروی (`startPos`) در حلقه‌ها برای تضمین قطعی عدم افتادن در حلقه بی‌نهایت.
+### 2.4. Recursive-Descent Parser & Panic-Mode Recovery (`include/parser/`, `src/parser/`)
+- References: [grammar_ebnf.md](grammar_ebnf.md), [parser_compatibility.md](parser_compatibility.md).
+- **Parsing Algorithm:** Deterministic `LL(1)` recursive descent with a single `LL(2)` lookahead (`IDENT` + `COLON`) in `parseStmt()`. Shared template helper `Parser::parseBinaryLeft` handles all left-associative operator precedence levels cleanly without code duplication, while `parseAssign()` and `parsePower()` use right recursion for right-associative `=` and `^`.
+- **Panic-Mode Error Recovery:**
+  - Filters out trivia and lexer-already-diagnosed `INVALID` tokens so syntax diagnostics do not duplicate lexical errors.
+  - Uses `panicMode_` to suppress cascading error spam inside a single broken expression or statement.
+  - Special handling in `expectClosingParenBeforeBlockOrStmt()` reports `missing ')' before '{'` while leaving `{` unconsumed so the conditional block body still parses intact.
+  - Combines statement synchronization (`;`, `}`, `{`, `if`, `for`, `return`, `print`, `IDENT ':'`, `EOF`), brace-depth-aware declaration synchronization (`synchronizeDecl()`), and loop progress guards (`startPos`) to guarantee termination without crashes.
 
-### ۲.۵. رنگ‌آمیز نحوی در سطح AST و تولیدکننده‌های خروجی (`include/highlighter/`, `include/output/`)
-- **مکانیزم AST-محور (`SyntaxHighlighter`):**
-  - به جای تکیه بر Regex یا صرفاً جریان توکن‌ها، `AstHighlightVisitor` ابتدا روی AST حرکت کرده و نقش زمینه‌ای هر گره را در یک جدول درهم‌سازی با کلید ۶۴بیتی `(line, column)` (`roleByLocation`) ثبت می‌کند.
-  - در نتیجه، شناسه تابع در `FuncDecl::nameLocation` و هدف فراخوانی در `CallExpr::callee` با دسته `FuncIdentifier` (زرد/طلایی) و شناسه‌های متغیر/پارامتر (`IdentifierExpr`, `VarDecl`, `ParamNode`) با `VarIdentifier` (سفید/پیش‌فرض) رنگ‌آمیزی می‌شوند؛ حتی اگر نام شناسه تابع و متغیر یکسان باشد.
-  - توکن‌های `INVALID` و موقعیت خطاهای نحوی غیر-EOF با دسته `Error` (زیرخط قرمز) مشخص می‌شوند.
-- **قالب‌های خروجی (`formatter.hpp`, `formatter.cpp`):**
-  - `formatAnsi`: افزودن کدهای SGR استاندارد ANSI و `\x1b[0m` حول هر توکن رنگی بدون دستکاری فاصله‌ها و حفظ بازنمایی دقیق کد منبع.
-  - `formatHtml`: تولید سند مستقل HTML5 با `<style>` تعبیه‌شده، بلوک `<pre class="bminor-code"><code>`، کلاس‌های `<span class="kw">`, `<span class="lit">`, `<span class="fn">` و غیره، و Escape کامل کاراکترهای `&`, `<`, `>`, `"`, `'` بدون وابستگی به JavaScript.
+### 2.5. AST-Level Syntax Highlighter & Output Formatters (`include/highlighter/`, `include/output/`)
+- **Context-Sensitive Classification ([highlighter.cpp](../src/highlighter/highlighter.cpp)):**
+  - Rather than regex matching or token-stream heuristics, `AstHighlightVisitor` walks the parsed AST and maps exact 64-bit `(line, column)` location keys into `roleByLocation`.
+  - Function declarations (`FuncDecl::nameLocation`) and call targets (`CallExpr::callee` when `IdentifierExpr`) receive `HighlightCategory::FuncIdentifier`, whereas `VarDecl`, `ParamNode`, and `IdentifierExpr` receive `HighlightCategory::VarIdentifier`—correctly distinguishing functions from variables even when both share the exact same identifier spelling.
+  - `INVALID` tokens and non-EOF syntactic diagnostic positions map to `HighlightCategory::Error`.
+- **Color Category Mapping ([formatter.cpp](../src/output/formatter.cpp)):**
+
+| Category | Role | ANSI Escape Sequence | HTML CSS Class |
+| :--- | :--- | :--- | :--- |
+| `Keyword` | Structural keywords (`if`, `return`, `function`, `array`, ...) | `\x1b[1;34m` (Bold blue) | `.kw` |
+| `TypeName` | Type names (`integer`, `boolean`, `char`, `string`, `void`) | `\x1b[36m` (Teal / cyan) | `.type` |
+| `VarIdentifier` | Variable & parameter identifiers | Default / plain (White / default) | `.var` |
+| `FuncIdentifier` | Function declaration & call identifiers | `\x1b[93m` (Yellow / gold) | `.fn` |
+| `IntLiteral` | Integer constants | `\x1b[38;5;208m` (Orange) | `.lit` |
+| `BoolLiteral` | Boolean constants (`true`, `false`) | `\x1b[38;5;208m` (Orange) | `.lit` |
+| `StringOrCharLiteral` | String and character literals | `\x1b[32m` (Warm green) | `.str` |
+| `Operator` | Arithmetic, relational, logical, postfix, assignment operators | `\x1b[37m` (Light gray) | `.op` |
+| `Comment` | Single-line (`//`) and block (`/* ... */`) comments | `\x1b[2;3;90m` (Dim gray, italic) | `.comment` |
+| `Error` | Lexical `INVALID` tokens and syntax error locations | `\x1b[4;91m` (Red underline) | `.err` |
+
+- **Output Format Guarantees:**
+  - `formatAnsi()` wraps colored tokens with `\x1b[0m` resets while passing whitespace and delimiters through verbatim, ensuring ANSI stripping restores the exact source text.
+  - `formatHtml()` produces a self-contained HTML5 document with an embedded `<style>` sheet, `<pre class="bminor-code"><code>...</code></pre>`, full HTML entity escaping (`&`, `<`, `>`, `"`, `'`), and zero JavaScript.
 
 ---
 
-## ۳. راهنمای سریع تغییر یا توسعه در فازهای بعدی
+## 3. Extension Points for Future Phases
 
-- **افزودن یک کلمه کلیدی یا عملگر جدید:** تعریف در `TokenType` (`include/lexer/token.hpp`)، افزودن در جدول `kKeywords` یا DFA (`src/lexer/lexer.cpp`) و نگاشت در `formatToken` (`src/lexer/token.cpp`).
-- **افزودن یک دستور یا عبارت نحوی جدید:** افزودن گره جدید در `include/ast/ast.hpp`، متد `visit` در `ASTVisitor`، پیاده‌سازی قاعده در `src/parser/parser.cpp` و ثبت نقش رنگی آن در `AstHighlightVisitor` (`src/highlighter/highlighter.cpp`).
-- **پیاده‌سازی تحلیل معنایی (فاز ۲ پروژه):** افزودن ماژول `SymbolTable` و پرکردن فیلد آماده `ASTNode::typeAnnotation` از طریق یک پیاده‌سازی جدید از `ASTVisitor` بدون نیاز به تغییر در Lexer یا Parser.
+- **Adding a Keyword or Token:** Add the enum entry in [include/lexer/token.hpp](../include/lexer/token.hpp), update `lookupKeywordOrIdent()` or DFA dispatch in [src/lexer/lexer.cpp](../src/lexer/lexer.cpp), and update `formatToken()` in [src/lexer/token.cpp](../src/lexer/token.cpp).
+- **Adding a Language Construct:** Add the AST node in [include/ast/ast.hpp](../include/ast/ast.hpp), extend `ASTVisitor` and `AstDumper`, parse the construct in [src/parser/parser.cpp](../src/parser/parser.cpp), and register its highlight roles in [src/highlighter/highlighter.cpp](../src/highlighter/highlighter.cpp).
+- **Semantic Analysis Integration (Next Course Phase):** Implement a symbol table and type-checking `ASTVisitor` that populates the pre-existing `ASTNode::typeAnnotation` field without modifying the `Lexer` or `Parser`.

@@ -1,21 +1,23 @@
-# طراحی تحلیل‌گر لغوی (Lexer Design — Manual DFA)
+# Lexer Design — Manual DFA Architecture
 
-این سند تصمیم طراحی انتخاب‌شده در **فاز ۲** را برای ماژول `Lexer` مستندسازی می‌کند (بخش ۱ و ۲ مستند [فاز اول پروژه کامپایلر.pdf](file:///e:/OneDrive/AUT/Compiler/project/phase1/%D9%81%D8%A7%D8%B2%20%D8%A7%D9%88%D9%84%20%D9%BE%D8%B1%D9%88%DA%98%D9%87%20%DA%A9%D8%A7%D9%85%D9%BE%D8%A7%DB%8C%D9%84%D8%B1.pdf)، ص ۷–۹ و سند [lexical_specification.md](file:///e:/OneDrive/AUT/Compiler/project/bminor/docs/lexical_specification.md)).
-
----
-
-## ۱. روش پیاده‌سازی انتخابی و ارتباط با مبانی نظری
-
-- **روش انتخابی:** پیاده‌سازی دستی ماشین متناهی قطعی (**Manual DFA**) در زبان استاندارد C++17.
-- **مبانی نظری:** هر دسته توکن تعریف‌شده در [lexical_specification.md](file:///e:/OneDrive/AUT/Compiler/project/bminor/docs/lexical_specification.md) یک زبان منظم است که به‌صورت نظری از مسیر **عبارت منظم ← ساخت تامپسون (NFA) ← ساخت زیرمجموعه‌ها (DFA) ← کمینه‌سازی Hopcroft** به یک DFA واحد نگاشت می‌شود. در پیاده‌سازی Manual DFA، گذارهای همین DFA کمینه‌شده مستقیماً با کد قطعی (بر پایه کاراکتر جاری و حداکثر ۱ کاراکتر lookahead در حالت‌هایی مانند `<=`، `++`، `//`، `/*`) پیاده‌سازی شده‌اند:
-  - زمان اجرا خطی $O(n)$ نسبت به طول ورودی بدون نیاز به Backtracking.
-  - کنترل دقیق روی ردیابی شماره خط و ستون مبنای ۱ (`SourceLocation`)، محدودیت طول ۲۵۶ کاراکتر و تولید پیام‌های خطای دقیق هنگام بازیابی.
+This document summarizes the implementation strategy chosen in Phase 2 for the **B-Minor** lexical analyzer (`include/lexer/`, `src/lexer/`).
 
 ---
 
-## ۲. ساختار جریان توکن‌ها برای فازهای بعدی
+## 1. Implementation Method & Theoretical Grounding
 
-- `Lexer::tokenize()` خروجی `LexResult` تولید می‌کند که شامل سه بخش است:
-  1. `allTokens`: توالی کامل و بدون اتلاف از تمام توکن‌های کد منبع شامل `WHITESPACE`، `COMMENT_LINE`، `COMMENT_BLOCK`، `INVALID` و `END_OF_FILE` (لازم برای بازنمایی دقیق کد منبع اصلی و رنگ‌آمیزی کامنت‌ها و خطاها در **فاز ۴**).
-  2. `parserTokens`: زیرجریان فیلترشده بدون `WHITESPACE` و توضیحات (همراه با `END_OF_FILE`) برای مصرف توسط `Parser` در **فاز ۳**.
-  3. `diagnostics`: فهرست خطاهای لغوی ثبت‌شده با موقعیت دقیق بدون توقف یا کرش برنامه.
+- **Selected Strategy:** **Manual Deterministic Finite Automaton (`Manual DFA`)** written in standard C++17.
+- **Connection to Automata Theory:** Each token pattern defined in [lexical_specification.md](lexical_specification.md) describes a regular language. Conceptually, the union of these regular expressions compiles via **Thompson's Construction (NFA) → Subset Construction (DFA) → Hopcroft Minimization** into a single deterministic recognizer. In our `Manual DFA` implementation, the minimized DFA transitions are encoded directly as deterministic state-dispatch branches using the current character and at most one lookahead character (for multi-character tokens such as `<=`, `++`, `&&`, `//`, and `/*`):
+  - Linear $O(n)$ time complexity with respect to source length $n$, with zero backtracking.
+  - Zero external regex dependencies.
+  - Exact control over 1-based `SourceLocation` tracking (`line`, `column`), 256-character identifier/string bounds checking, and non-fatal error recovery.
+
+---
+
+## 2. Dual Token-Stream Output (`LexResult`)
+
+`Lexer::tokenize()` produces a `LexResult` containing three fields ([include/lexer/lexer.hpp](../include/lexer/lexer.hpp)):
+
+1. `allTokens`: Lossless sequence of every scanned token (`WHITESPACE`, `COMMENT_LINE`, `COMMENT_BLOCK`, `INVALID`, syntactic tokens, and trailing `END_OF_FILE`). Concatenating the lexemes of `allTokens` reproduces the exact original source byte-for-byte, enabling lossless AST-level syntax highlighting.
+2. `parserTokens`: Filtered stream excluding `WHITESPACE` and comments (retaining `END_OF_FILE`) consumed directly by the `Parser`.
+3. `diagnostics`: Accumulated `Diagnostic` records (`DiagnosticStage::Lexical`) with exact `SourceLocation` metadata and no process termination.
